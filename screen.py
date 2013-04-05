@@ -5,6 +5,7 @@ from multiprocessing import Process, Queue
 import curses
 from time import sleep
 from datetime import datetime, timedelta
+from StringIO import StringIO
 from Queue import Empty
 
 import random
@@ -13,27 +14,17 @@ UNIT_KEY_BLACKLIST = ['v']
 MAP_CURSOR_BLINK_RATE = timedelta(milliseconds=500)
 
 
-def start_debugger(queue):
-    screen = AsyncCursesScreen()
-    p = Process(target=screen.start, args=(queue,))
-    p.start()
-    return p
-
-def update_units(queue, units):
-    queue.put(('units',units),False)
-
-def print_debug(queue,string):
-    queue.put(('debug',string),False)
 
 class AsyncCursesScreen(object):
     def __init__(self):
         self.paused = False
-    def join(self):
-        self.queue.put("!!HALT")
-        self.process.join()
+        self.halting = False
     def start(self,q):
         self.queue = q
-        curses.wrapper(self.handler)
+        try:
+            curses.wrapper(self.handler)
+        except KeyboardInterrupt:
+            pass
     def handler(self,stdscr):
         curses.init_pair(2,curses.COLOR_BLUE,curses.COLOR_BLACK)
         curses.init_pair(3,curses.COLOR_RED,curses.COLOR_BLACK)
@@ -80,11 +71,13 @@ class AsyncCursesScreen(object):
             elif key == 119:
                 self.unit.cursor_previous()
             elif key == 32:
+                if self.halting:
+                    break
                 self.paused = not self.paused
                 if self.paused:
-                    self.debug.write("Paused")
+                    self.debug.write("-- Paused")
                 else:
-                    self.debug.write("Unpaused")
+                    self.debug.write("-- Unpaused")
             # Pull items from the pipe if not paused
             if not self.paused:
                 try:
@@ -93,15 +86,18 @@ class AsyncCursesScreen(object):
                         self.game.update(contents)
                     elif t == 'debug':
                         self.debug.write(contents)            
+                    elif t == 'halt':
+                        self.halting = True
+                        self.debug.write("-- End of queue, press space to close")
                 except Empty:
                     pass
+                
             #Update the unit view
             self.unit.view(self.game.objects_at_cursor())
             self.debug.blit()
             self.unit.blit()
             self.game.blit()
             sleep(.01)
-            pass
     
 
 class CursesWindow(object):
@@ -287,9 +283,12 @@ class UnitWindow(CursesWindow):
     
     def blit(self):
         self.dwindow.erase()
+        if len(self.viewing) > 0:
+            self.dwindow.addstr(0,0,"Viewing unit {}/{}".format(self.cursor+1,len(self.viewing)))
         if len(self.viewing) == 0:
+            self.dwindow.refresh()
             return
-        c = 0
+        c = 1
         for (k,v) in self.viewing[self.cursor].iteritems():
             if c > self.usable_height():
                 break
@@ -348,9 +347,53 @@ class DebugWindow(CursesWindow):
         self.dirty = True
         self.cursor = min(len(self.scrollback)-1,self.cursor+1)
 
+class Vexulizer(object):
+    def __init__(self):
+        self.locq = Queue()
+        self.rstdout = sys.stdout
+        self.buff = DebugBuffer(self.locq)
+        sys.stdout = self.buff
+        self.proc = self.start_debugger()
+    
+    def start_debugger(self):
+        screen = AsyncCursesScreen()
+        p = Process(target=screen.start, args=(self.locq,))
+        p.start()
+        return p
+    
+    def stop_debugger(self):
+        self.locq.put(('halt',''),False)
+        self.proc.join()
+    
+    def update_units(self, units):
+        self.locq.put(('units',units))
+
+    def print_debug(self, string):
+        self.locq.put(('debug',string))
+        
+    def __del__(self):
+        # Restore the stdout on destruction
+        print >>self.rstdout, self.buff.getvalue()
+        #return super(Vexulizer,self).__del__()
+
+
+class DebugBuffer(StringIO):
+    def __init__(self,locq):
+        self.locq = locq
+        StringIO.__init__(self)
+    
+    def write(self,s):
+        self.locq.put(('debug',s))
+        StringIO.write(self,s)
+    
+    def writelines(self,sequence):
+        for line in sequence:
+            self.locq.put(('debug',line))
+        StringIO.writelines(self,sequence)
+
+
 if __name__ == "__main__":
-    locq = Queue()
-    start_debugger(locq)
+    v = Vexulizer()
 
     print "Goodbye"
     print "You Say Hello"
@@ -360,8 +403,8 @@ if __name__ == "__main__":
     ENEMY_COLOR = 3
     FRIENDLY_COLOR = 4
 
-    while 1:
-        print_debug(locq,"Hello world!!") 
+    for i in range(15):
+        #v.print_debug(locq,"Hello world!!") 
         mapjunk = []
         for j in range(200): 
             mapjunk.append({'x':random.randint(0,MAP_WIDTH-1),
@@ -375,5 +418,9 @@ if __name__ == "__main__":
                             'id': j,
                             'attacks': random.randint(0,3)
                             })
-        update_units(locq, mapjunk) 
+        #Convert the string IO to print debug
+        print "Test!"
+        v.update_units(mapjunk) 
         sleep(.5)
+    
+    v.stop_debugger()
