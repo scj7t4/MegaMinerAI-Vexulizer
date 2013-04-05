@@ -3,62 +3,106 @@ import sys
 
 from multiprocessing import Process, Queue
 import curses
-from cStringIO import StringIO
 from time import sleep
+from datetime import datetime, timedelta
+from Queue import Empty
 
 import random
 
+UNIT_KEY_BLACKLIST = ['v']
+MAP_CURSOR_BLINK_RATE = timedelta(milliseconds=500)
+
+
+def start_debugger(queue):
+    screen = AsyncCursesScreen()
+    p = Process(target=screen.start, args=(queue,))
+    p.start()
+    return p
+
+def update_units(queue, units):
+    queue.put(('units',units),False)
+
+def print_debug(queue,string):
+    queue.put(('debug',string),False)
+
 class AsyncCursesScreen(object):
     def __init__(self):
-        self.queue = Queue()
-        self.process = Process(target=lambda: curses.wrapper(self.handler))
-        self.process.start()
+        self.paused = False
     def join(self):
         self.queue.put("!!HALT")
         self.process.join()
+    def start(self,q):
+        self.queue = q
+        curses.wrapper(self.handler)
     def handler(self,stdscr):
+        curses.init_pair(2,curses.COLOR_BLUE,curses.COLOR_BLACK)
+        curses.init_pair(3,curses.COLOR_RED,curses.COLOR_BLACK)
+        curses.init_pair(4,curses.COLOR_GREEN,curses.COLOR_BLACK)
         # First, draw the initial window.
         stdscr.border()
         stdscr.touchwin()
         stdscr.refresh()
+        stdscr.nodelay(1)
         curses.use_default_colors()
+        curses.curs_set(0)
         (ty,tx) = stdscr.getmaxyx()
+        #MOVE TO COLORS.PY
+        curses.init_pair(3,curses.COLOR_RED,curses.COLOR_BLACK)
+        curses.init_pair(4,curses.COLOR_GREEN,curses.COLOR_BLACK)
+        curses.init_pair(5,curses.COLOR_BLUE,curses.COLOR_BLACK)
+        curses.init_pair(2,curses.COLOR_YELLOW,curses.COLOR_BLACK)
         self.game = MapWindow(MAP_HEIGHT+5, MAP_WIDTH*2+5, 0, 0,MAP_WIDTH,MAP_HEIGHT)
         self.unit = UnitWindow(MAP_HEIGHT+5, tx-(MAP_WIDTH*2+5), 0, MAP_WIDTH*2+5)
         self.debug = DebugWindow(ty-(MAP_HEIGHT+5), tx, MAP_HEIGHT+5, 0)
-        self.debug.write("Hello World!")
-        self.debug.write("Hello World!")
-        self.debug.write("Hello World!")
-        self.debug.write(curses.has_colors())
-        self.debug.blit()
         self.unit.view({'x':5,'y':6,'health':7,'attacks_left':8})
-        self.unit.blit()
-        self.game.blit()
-        mapjunk = []
-        curses.init_pair(2,curses.COLOR_BLUE,curses.COLOR_BLACK)
-        curses.init_pair(3,curses.COLOR_RED,curses.COLOR_BLACK)
-        curses.init_pair(4,curses.COLOR_GREEN,curses.COLOR_BLACK)
-        WALL_COLOR = curses.color_pair(2)
-        ENEMY_COLOR = curses.color_pair(3)
-        FRIENDLY_COLOR = curses.color_pair(4)
-        for i in range(300):
-            mapjunk = []
-            for j in range(200): 
-                mapjunk.append({'x':random.randint(0,MAP_WIDTH-1),
-                                'y':random.randint(0,MAP_HEIGHT-1),
-                                'v':random.choice([('X',WALL_COLOR),
-                                                   ('W',ENEMY_COLOR),
-                                                   ('W',FRIENDLY_COLOR),
-                                                   ('S',ENEMY_COLOR),
-                                                   ('S',FRIENDLY_COLOR)])})
-            self.game.update(mapjunk)
-            self.game.blit()
-            self.debug.write(str(i))
-            self.debug.blit()
-            sleep(.5)
         while 1:
-            sleep(.5)
+            # Accept key events from the terminal
+            key = stdscr.getch()
+            if key != -1:
+                self.debug.write("Got key {}".format(key))
+            if key == curses.KEY_UP:
+                #self.debug.write("Got key up")
+                self.game.cursor_up()
+            elif key == curses.KEY_DOWN:
+                #self.debug.write("Got key down")
+                self.game.cursor_down()
+            elif key == curses.KEY_LEFT:
+                #self.debug.write("Got key left")
+                self.game.cursor_left()
+            elif key == curses.KEY_RIGHT:
+                #self.debug.write("Got key right")
+                self.game.cursor_right()
+            elif key == 9: #Tab
+                #self.debug.write("Got key tab")
+                self.game.cursor_hide()
+            elif key == 113:
+                self.unit.cursor_next()
+            elif key == 119:
+                self.unit.cursor_previous()
+            elif key == 32:
+                self.paused = not self.paused
+                if self.paused:
+                    self.debug.write("Paused")
+                else:
+                    self.debug.write("Unpaused")
+            # Pull items from the pipe if not paused
+            if not self.paused:
+                try:
+                    (t, contents) = self.queue.get(False)
+                    if t == 'units':
+                        self.game.update(contents)
+                    elif t == 'debug':
+                        self.debug.write(contents)            
+                except Empty:
+                    pass
+            #Update the unit view
+            self.unit.view(self.game.objects_at_cursor())
+            self.debug.blit()
+            self.unit.blit()
+            self.game.blit()
+            sleep(.01)
             pass
+    
 
 class CursesWindow(object):
     def __init__(self,height,width,yoffset,xoffset,border=True,window_title=None):
@@ -96,6 +140,8 @@ class MapWindow(CursesWindow):
         self.dwindow.refresh()
         self.cursor = (0,0)
         self.showcursor = False
+        self.blinkcursor = False
+        self.lastblink = datetime.today()
         self.cwindow = self.window.derwin(1,self.usable_width(),1,self.usablex[0])
         self.describe_cursor()
         self.window.refresh()
@@ -104,92 +150,151 @@ class MapWindow(CursesWindow):
         self.objects = []
         return x
 
+    def objects_at_cursor(self):
+        return [ x for x in self.objects if x['x'] == self.cursor[1] and x['y'] == self.cursor[0] ]
+
     def update(self,objs):
         # expects a list of dicts, each of which need and x,y pair
         self.objects = objs
 
     def blit(self):
+        self.describe_cursor()
         self.dwindow.erase()  
         # Draw dots in for all the celles
         for i in range(self.map_width):
             for j in range(self.map_height):
                 self.dwindow.addch(j,i*2,'.')
         for o in self.objects:
-            self.dwindow.addch(o['y'], o['x']*2, o['v'][0],o['v'][1])
+            self.dwindow.addch(o['y'], o['x']*2, o['v'][0],curses.color_pair(o['v'][1]))
+        if datetime.today()-self.lastblink > MAP_CURSOR_BLINK_RATE:
+            self.lastblink = datetime.today()
+            self.blinkcursor = not self.blinkcursor
+        if self.showcursor and self.blinkcursor:
+            self.dwindow.addch(self.cursor[0],self.cursor[1]*2,'*', curses.color_pair(2))
         self.dwindow.refresh()
  
     def describe_cursor(self):
         self.cwindow.erase()
-        if self.showcursor:
-            self.cwindow.addstr("Cursor Position {},{}".format(self.cursor[1],self.cursor[0]))
-        else:
-            self.cwindow.addstr("Cursor Off")
+        self.cwindow.addstr("Cursor Position {},{}".format(self.cursor[1],self.cursor[0]))
         self.cwindow.refresh()
  
     def fix_cursor(self):
-        if self.cursor[1] > self.map_width:
-            y = 0
-        elif self.cursor[1] < 0:
-            y = self.map_width-1
-        else:
-            y = self.cursor[1]
-        if self.cursor[0] > self.map_height:
+        if self.cursor[1] >= self.map_width:
             x = 0
-        elif self.cursor[0] < 0:
+        elif self.cursor[1] < 0:
             x = self.map_width-1
         else:
-            x = self.cursor[0]
+            x = self.cursor[1]
+        if self.cursor[0] >= self.map_height:
+            y = 0
+        elif self.cursor[0] < 0:
+            y = self.map_height-1
+        else:
+            y = self.cursor[0]
         self.cursor = (y,x)
+        self.showcursor = True
 
     def cursor_left(self):
         self.cursor = (self.cursor[0],self.cursor[1]-1)
-        self.fix_cursor
+        self.fix_cursor()
         return self.cursor
     def cursor_right(self):
         self.cursor = (self.cursor[0],self.cursor[1]+1)
-        self.fix_cursor
+        self.fix_cursor()
         return self.cursor
     def cursor_up(self):
         self.cursor = (self.cursor[0]-1,self.cursor[1])
-        self.fix_cursor
+        self.fix_cursor()
         return self.cursor
     def cursor_down(self):
         self.cursor = (self.cursor[0]+1,self.cursor[1])
-        self.fix_cursor
+        self.fix_cursor()
         return self.cursor
+    def cursor_hide(self):
+        self.showcursor = False
 
 
 class UnitWindow(CursesWindow):
     def __init__(self, height, width, yoffset, xoffset):
         x = super(UnitWindow, self).__init__(height,width,yoffset,xoffset,window_title="Unit Viewer")
         self.window.addstr(1,1,"Press arrow keys to move cursor. Space to pause/unpause output.")
-        self.window.addstr(2,1,"Esc will stop the cursor")
+        self.window.addstr(2,1,"Tab will hide the cursor, Q/W cycles through units under the cursor.")
         self.usabley = (3,self.usabley[1])
         self.dwindow = self.window.derwin(self.usable_height(),self.usable_width(),3,1)
         self.window.refresh()
         self.dwindow.refresh()
-        self.dirty = False
-        self.cursor = (0,0)
-        self.viewing = None
+        self.cursor = 0
+        self.cursorid = None
+        self.viewing = []
         return x
 
-    def view(self,obj):
+    def view(self,objs):
         # for simplicity, and pickles, expects a dict
-        self.viewing = obj
-        self.dirty = True
+        if self.viewing != objs:
+            self.viewing = objs
+            self.cursor = 0
+            ocid = self.cursorid
+            self.cursorid = None
+            #We'll try and restore the cursor based on the last object id
+            #We looked at, if we can't its no big deal.
+            #If the ocid hasn't been set, try to set it to the first obj
+            if ocid == None and len(objs) > 0:
+                try:
+                    self.cursorid = objs[0]['id']
+                except KeyError:
+                    pass
+            #If there are objects and the ocid is set try to restore the cursor
+            elif len(objs) > 0:
+                c = 0
+                for o in objs:
+                    try:
+                        if o['id'] == ocid:
+                            self.cursor = c
+                            self.cursorid = o['id']
+                    except KeyError:
+                        pass
+                    c += 1
+            #if no matches were found, the cursor will be reset to 0 and the
+            #cursorid will be set to the first object, if it has an id:
+            if self.cursorid == None and len(objs) > 0:
+                try:
+                    self.cursorid = objs[0]['id']
+                except KeyError:
+                    pass
+            #All else fails,cursor id returns to the first object
+                 
+    def cursor_next(self):
+        self.cursor += 1
+        if self.cursor >= len(self.viewing):
+            self.cursor = 0
+            try:
+                self.cursorid = self.viewing[self.cursor]['id']
+            except KeyError:
+                pass
+            except IndexError:
+                pass
+
+    def cursor_previous(self):
+        self.cursor -= 1
+        if self.cursor < 0:
+            self.cursor = max(0,len(self.viewing)-1)
+            try:
+                self.cursorid = self.viewing[self.cursor]['id']
+            except KeyError:
+                pass
+            except IndexError:
+                pass
     
     def blit(self):
-        if self.dirty == False:
-            print "NOT DIRTY"
-            return
-        self.dirty = False
         self.dwindow.erase()
-        if self.viewing == None:
+        if len(self.viewing) == 0:
             return
         c = 0
-        for (k,v) in self.viewing.iteritems():
+        for (k,v) in self.viewing[self.cursor].iteritems():
             if c > self.usable_height():
                 break
+            if k in UNIT_KEY_BLACKLIST:
+                continue
             self.dwindow.addstr(c,0,"{}: {}".format(k,v))
             c += 1
         self.dwindow.refresh()
@@ -243,8 +348,32 @@ class DebugWindow(CursesWindow):
         self.dirty = True
         self.cursor = min(len(self.scrollback)-1,self.cursor+1)
 
-AsyncCursesScreen()
-print "Goodbye"
-print "You Say Hello"
-print "I say goodbye"
-sleep(60)
+if __name__ == "__main__":
+    locq = Queue()
+    start_debugger(locq)
+
+    print "Goodbye"
+    print "You Say Hello"
+    print "I say goodbye"
+
+    WALL_COLOR = 2
+    ENEMY_COLOR = 3
+    FRIENDLY_COLOR = 4
+
+    while 1:
+        print_debug(locq,"Hello world!!") 
+        mapjunk = []
+        for j in range(200): 
+            mapjunk.append({'x':random.randint(0,MAP_WIDTH-1),
+                            'y':random.randint(0,MAP_HEIGHT-1),
+                            'v':random.choice([('X',WALL_COLOR),
+                                               ('W',ENEMY_COLOR),
+                                               ('W',FRIENDLY_COLOR),
+                                               ('S',ENEMY_COLOR),
+                                               ('S',FRIENDLY_COLOR)]),
+                            'health': random.randint(1,100),
+                            'id': j,
+                            'attacks': random.randint(0,3)
+                            })
+        update_units(locq, mapjunk) 
+        sleep(.5)
