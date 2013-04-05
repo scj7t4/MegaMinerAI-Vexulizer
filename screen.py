@@ -66,11 +66,11 @@ class AsyncCursesScreen(object):
             elif key == 9: #Tab
                 #self.debug.write("Got key tab")
                 self.game.cursor_hide()
-            elif key == 113:
+            elif key == 113: #W
                 self.unit.cursor_next()
-            elif key == 119:
+            elif key == 119: #Q
                 self.unit.cursor_previous()
-            elif key == 32:
+            elif key == 32: #Space
                 if self.halting:
                     break
                 self.paused = not self.paused
@@ -303,9 +303,10 @@ class DebugWindow(CursesWindow):
     def __init__(self, height, width, yoffset, xoffset, scrollback=2000):
         x = super(DebugWindow, self).__init__(height,width,yoffset,xoffset,window_title="Debug Output")
         self.window.refresh()
-        self.scrollback = ["Logger Output Will Appear Here, a/z to scroll up down"]
-        self.cursor = 0
+        self.scrollback = "Logger Output Will Appear Here\n"
         self.dwindow = self.window.derwin(self.usable_height(),self.usable_width(),1,1)
+        self.dwindow.idlok(1)
+        self.dwindow.scrollok(True)
         self.dwindow.refresh()
         self.dirty = False
         return x
@@ -313,46 +314,26 @@ class DebugWindow(CursesWindow):
     def write(self,string):
         string = str(string)
         #Chunk the string to display nicely:
-        self.scrollback += string.split("\n")
-        self.cursor = len(self.scrollback)-1
+        self.scrollback += string
+        self.dwindow.addstr(string)
+        self.cursor = 0
         self.dirty = True
     
     def blit(self):
         if self.dirty == False:
             return
         self.dirty = False
-        usedlines = 0
-        self.dwindow.erase()
-        c = self.cursor
-        def numlines(string):
-            l = len(string)/self.usable_width()
-            if len(string) % self.usable_width() > 0:
-                l += 1
-            return l
-        while usedlines < self.usable_height() and c >= 0:
-            usedlines += numlines(self.scrollback[c])
-            c -= 1
-        c += 1
-        bc = 0
-        for line in self.scrollback[c+1:self.cursor+1]:
-            self.dwindow.addstr(bc,0,line)
-            bc += numlines(line)
         self.dwindow.refresh()
-    
-    def cursor_up(self):
-        self.dirty = True
-        self.cursor = max(0,self.cursor-1)
-    
-    def cursor_down(self):
-        self.dirty = True
-        self.cursor = min(len(self.scrollback)-1,self.cursor+1)
 
 class Vexulizer(object):
     def __init__(self):
         self.locq = Queue()
         self.rstdout = sys.stdout
+        self.rstderr = sys.stderr
         self.buff = DebugBuffer(self.locq)
+        self.errbuff = DebugBuffer(self.locq)
         sys.stdout = self.buff
+        sys.stderr = self.errbuff
         self.proc = self.start_debugger()
     
     def start_debugger(self):
@@ -374,6 +355,7 @@ class Vexulizer(object):
     def __del__(self):
         # Restore the stdout on destruction
         print >>self.rstdout, self.buff.getvalue()
+        print >>self.rstderr, self.errbuff.getvalue()
         #return super(Vexulizer,self).__del__()
 
 
@@ -403,7 +385,11 @@ if __name__ == "__main__":
     ENEMY_COLOR = 3
     FRIENDLY_COLOR = 4
 
-    for i in range(15):
+    print "This is a particularly long string: it is interesting because magically, it will make" \
+        "me cry out to thor and summon him forth"
+
+    for i in range(50):
+        print "Turn {}".format(i)
         #v.print_debug(locq,"Hello world!!") 
         mapjunk = []
         for j in range(200): 
@@ -422,5 +408,6 @@ if __name__ == "__main__":
         print "Test!"
         v.update_units(mapjunk) 
         sleep(.5)
+    print crashpzl
     
     v.stop_debugger()
