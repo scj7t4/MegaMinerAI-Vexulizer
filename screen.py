@@ -1,30 +1,57 @@
 from game import MAP_HEIGHT, MAP_WIDTH
 import sys
 
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Value
 import curses
 from time import sleep
 from datetime import datetime, timedelta
 from StringIO import StringIO
 from Queue import Empty
-
-import random
+import traceback
+from vexulizer import Vexulizer
 
 UNIT_KEY_BLACKLIST = ['v']
 MAP_CURSOR_BLINK_RATE = timedelta(milliseconds=500)
 
-
+class WindowBox(object):
+    def __init__(self, height, width, yoffset, xoffset):
+        self.height = height
+        self.width = width
+        self.xoffset = xoffset
+        self.yoffset = yoffset
+    
+    def check_dims(self,parent):
+        (ty,tx) = parent.getmaxyx()
+        if self.xoffset+self.width > tx:
+            return False
+        if self.yoffset+self.height > ty:
+            return False
+        return True
+ 
+    def create(self, parent=None):
+        if parent:
+            return parent.derwin(self.height,self.width,self.yoffset,self.xoffset)
+        else:
+            return curses.newwin(self.height,self.width,self.yoffset,self.xoffset) 
 
 class AsyncCursesScreen(object):
     def __init__(self):
         self.paused = False
         self.halting = False
-    def start(self,q):
+    def start(self,q,running):
+        self.running = running
         self.queue = q
         try:
             curses.wrapper(self.handler)
-        except KeyboardInterrupt:
-            pass
+        except:
+            #Restore the real stderr and stdout?
+            sys.stderr = Vexulizer.rstderr
+            sys.stdout = Vexulizer.rstdout
+            print "Something went terribly wrong! Is your terminal wide enough?"
+            print traceback.format_exc()
+            sys.stdout.flush()
+            self.running.value = False          
+ 
     def handler(self,stdscr):
         curses.init_pair(2,curses.COLOR_BLUE,curses.COLOR_BLACK)
         curses.init_pair(3,curses.COLOR_RED,curses.COLOR_BLACK)
@@ -42,10 +69,27 @@ class AsyncCursesScreen(object):
         curses.init_pair(4,curses.COLOR_GREEN,curses.COLOR_BLACK)
         curses.init_pair(5,curses.COLOR_BLUE,curses.COLOR_BLACK)
         curses.init_pair(2,curses.COLOR_YELLOW,curses.COLOR_BLACK)
-        self.game = MapWindow(MAP_HEIGHT+5, MAP_WIDTH*2+5, 0, 0,MAP_WIDTH,MAP_HEIGHT)
-        self.unit = UnitWindow(MAP_HEIGHT+5, tx-(MAP_WIDTH*2+5), 0, MAP_WIDTH*2+5)
-        self.debug = DebugWindow(ty-(MAP_HEIGHT+5), tx, MAP_HEIGHT+5, 0)
-        self.unit.view({'x':5,'y':6,'health':7,'attacks_left':8})
+         
+        mapbox = WindowBox(MAP_HEIGHT+5, MAP_WIDTH*2+5, 0, 0)
+        unitbox = WindowBox(MAP_HEIGHT+5, tx-(MAP_WIDTH*2+5), 0, MAP_WIDTH*2+5)
+        debugbox = WindowBox(ty-(MAP_HEIGHT+5), tx, MAP_HEIGHT+5, 0)
+
+        if tx < 120:
+            curses.resizeterm(ty,120)
+
+        if not mapbox.check_dims(stdscr):
+            return
+        
+        if not unitbox.check_dims(stdscr):
+            return
+
+        if not unitbox.check_dims(stdscr):
+            return
+        
+        self.game = MapWindow(mapbox, MAP_WIDTH,MAP_HEIGHT)
+        self.unit = UnitWindow(unitbox)
+        self.debug = DebugWindow(debugbox)
+       
         while 1:
             # Accept key events from the terminal
             key = stdscr.getch()
@@ -101,18 +145,18 @@ class AsyncCursesScreen(object):
     
 
 class CursesWindow(object):
-    def __init__(self,height,width,yoffset,xoffset,border=True,window_title=None):
-        self.window = curses.newwin(height,width,yoffset,xoffset)
+    def __init__(self,windowbox,border=True,window_title=None):
+        self.window = windowbox.create()
         if border:
             self.window.border()
             self.window.touchwin()
             if window_title:
                 self.window.addstr(0,1,window_title)
-            self.usablex = (1,width-1)
-            self.usabley = (1,height-1)
+            self.usablex = (1,windowbox.width-1)
+            self.usabley = (1,windowbox.height-1)
         else:
-            self.usablex = (0,width)
-            self.usabley = (0,height)
+            self.usablex = (0,windowbox.width)
+            self.usabley = (0,windowbox.height)
         self.window.refresh()        
     def blit(self):
         self.window.refresh()
@@ -122,8 +166,10 @@ class CursesWindow(object):
         return self.usabley[1]-self.usabley[0]
 
 class MapWindow(CursesWindow):
-    def __init__(self, height, width, yoffset, xoffset, map_width, map_height):
-        x = super(MapWindow, self).__init__(height,width,yoffset,xoffset,window_title="Map")
+    def __init__(self, windowbox, map_width, map_height):
+        x = super(MapWindow, self).__init__(windowbox,window_title="Map")
+        self.window.idlok(1)
+        self.window.scrollok(True)
         for i in range(map_width):
             self.window.addch(2,i*2+4,str(i/10)[0])
             self.window.addch(3,i*2+4,str(i%10)[0])
@@ -133,6 +179,8 @@ class MapWindow(CursesWindow):
         self.usablex = (4,self.usablex[1])
         self.usabley = (4,self.usabley[1])
         self.dwindow = self.window.derwin(self.usable_height(),self.usable_width(),self.usabley[0],self.usablex[0])
+        self.dwindow.idlok(1)
+        self.dwindow.scrollok(True)
         self.dwindow.refresh()
         self.cursor = (0,0)
         self.showcursor = False
@@ -211,13 +259,17 @@ class MapWindow(CursesWindow):
 
 
 class UnitWindow(CursesWindow):
-    def __init__(self, height, width, yoffset, xoffset):
-        x = super(UnitWindow, self).__init__(height,width,yoffset,xoffset,window_title="Unit Viewer")
+    def __init__(self, windowbox):
+        x = super(UnitWindow, self).__init__(windowbox,window_title="Unit Viewer")
+        self.window.idlok(1)
+        self.window.scrollok(True)
         self.window.addstr(1,1,"Press arrow keys to move cursor. Space to pause/unpause output.")
         self.window.addstr(2,1,"Tab will hide the cursor, Q/W cycles through units under the cursor.")
         self.usabley = (3,self.usabley[1])
         self.dwindow = self.window.derwin(self.usable_height(),self.usable_width(),3,1)
         self.window.refresh()
+        self.dwindow.idlok(1)
+        self.dwindow.scrollok(True)
         self.dwindow.refresh()
         self.cursor = 0
         self.cursorid = None
@@ -300,8 +352,8 @@ class UnitWindow(CursesWindow):
 
 
 class DebugWindow(CursesWindow):
-    def __init__(self, height, width, yoffset, xoffset, scrollback=2000):
-        x = super(DebugWindow, self).__init__(height,width,yoffset,xoffset,window_title="Debug Output")
+    def __init__(self, windowbox, scrollback=2000):
+        x = super(DebugWindow, self).__init__(windowbox,window_title="Debug Output")
         self.window.refresh()
         self.scrollback = "Logger Output Will Appear Here\n"
         self.dwindow = self.window.derwin(self.usable_height(),self.usable_width(),1,1)
@@ -324,90 +376,3 @@ class DebugWindow(CursesWindow):
             return
         self.dirty = False
         self.dwindow.refresh()
-
-class Vexulizer(object):
-    def __init__(self):
-        self.locq = Queue()
-        self.rstdout = sys.stdout
-        self.rstderr = sys.stderr
-        self.buff = DebugBuffer(self.locq)
-        self.errbuff = DebugBuffer(self.locq)
-        sys.stdout = self.buff
-        sys.stderr = self.errbuff
-        self.proc = self.start_debugger()
-    
-    def start_debugger(self):
-        screen = AsyncCursesScreen()
-        p = Process(target=screen.start, args=(self.locq,))
-        p.start()
-        return p
-    
-    def stop_debugger(self):
-        self.locq.put(('halt',''),False)
-        self.proc.join()
-    
-    def update_units(self, units):
-        self.locq.put(('units',units))
-
-    def print_debug(self, string):
-        self.locq.put(('debug',string))
-        
-    def __del__(self):
-        # Restore the stdout on destruction
-        print >>self.rstdout, self.buff.getvalue()
-        print >>self.rstderr, self.errbuff.getvalue()
-        #return super(Vexulizer,self).__del__()
-
-
-class DebugBuffer(StringIO):
-    def __init__(self,locq):
-        self.locq = locq
-        StringIO.__init__(self)
-    
-    def write(self,s):
-        self.locq.put(('debug',s))
-        StringIO.write(self,s)
-    
-    def writelines(self,sequence):
-        for line in sequence:
-            self.locq.put(('debug',line))
-        StringIO.writelines(self,sequence)
-
-
-if __name__ == "__main__":
-    v = Vexulizer()
-
-    print "Goodbye"
-    print "You Say Hello"
-    print "I say goodbye"
-
-    WALL_COLOR = 2
-    ENEMY_COLOR = 3
-    FRIENDLY_COLOR = 4
-
-    print "This is a particularly long string: it is interesting because magically, it will make" \
-        "me cry out to thor and summon him forth"
-
-    for i in range(50):
-        print "Turn {}".format(i)
-        #v.print_debug(locq,"Hello world!!") 
-        mapjunk = []
-        for j in range(200): 
-            mapjunk.append({'x':random.randint(0,MAP_WIDTH-1),
-                            'y':random.randint(0,MAP_HEIGHT-1),
-                            'v':random.choice([('X',WALL_COLOR),
-                                               ('W',ENEMY_COLOR),
-                                               ('W',FRIENDLY_COLOR),
-                                               ('S',ENEMY_COLOR),
-                                               ('S',FRIENDLY_COLOR)]),
-                            'health': random.randint(1,100),
-                            'id': j,
-                            'attacks': random.randint(0,3)
-                            })
-        #Convert the string IO to print debug
-        print "Test!"
-        v.update_units(mapjunk) 
-        sleep(.5)
-    print crashpzl
-    
-    v.stop_debugger()
