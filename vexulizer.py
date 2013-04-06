@@ -1,4 +1,3 @@
-from game import MAP_HEIGHT, MAP_WIDTH
 from screen import *
 import sys
 
@@ -17,10 +16,10 @@ import random
 class Vexulizer(object):
     rstdout = sys.stdout
     rstderr = sys.stderr
-    def __init__(self):
+    def __init__(self,mapwidth,mapheight):
         self.locq = Queue()
         self.running = Value('b',True)
-        screen = AsyncCursesScreen()
+        screen = AsyncCursesScreen(mapheight,mapwidth)
         self.proc = Process(target=screen.start, args=(self.locq,self.running))
         self.buff = DebugBuffer(self.locq,self.running,sys.stdout)
         self.errbuff = DebugBuffer(self.locq,self.running,sys.stderr)
@@ -33,13 +32,13 @@ class Vexulizer(object):
         self.locq.put(('halt',''),False)
         if not self.running.value:
             self.proc.terminate()
-        # If the local queue is not empty the process will hang on exit
-        # so dump the queue out
-        try:
-            while 1:
-               self.locq.get(False)
-        except Empty:
-            pass
+            # If the local queue is not empty the process will hang on exit
+            # so dump the queue out
+            try:
+                while 1:
+                   self.locq.get(False)
+            except Empty:
+                pass
         self.proc.join()
         sys.stdout = self.rstdout
         sys.stderr = self.rstderr
@@ -52,16 +51,6 @@ class Vexulizer(object):
 
     def print_debug(self, string):
         self.locq.put(('debug',string))
-   
-    """
-    def __del__(self):
-        # Restore the stdout on destruction
-        self.rstdout.write(self.buff.getvalue())
-        self.rstdout.flush() 
-        self.rstderr.write(self.errbuff.getvalue())
-        self.rstderr.flush() 
-        #return super(Vexulizer,self).__del__()
-    """
 
 class DebugBuffer(StringIO):
     def __init__(self,locq,running, replaces=None):
@@ -89,7 +78,7 @@ class DebugBuffer(StringIO):
 
 
 if __name__ == "__main__":
-    v = Vexulizer()
+    v = Vexulizer(40,20)
 
     print "Goodbye"
     print "You Say Hello"
@@ -107,8 +96,8 @@ if __name__ == "__main__":
         #v.print_debug(locq,"Hello world!!") 
         mapjunk = []
         for j in range(200): 
-            mapjunk.append({'x':random.randint(0,MAP_WIDTH-1),
-                            'y':random.randint(0,MAP_HEIGHT-1),
+            mapjunk.append({'x':random.randint(0,40-1),
+                            'y':random.randint(0,20-1),
                             'v':random.choice([('X',WALL_COLOR),
                                                ('W',ENEMY_COLOR),
                                                ('W',FRIENDLY_COLOR),

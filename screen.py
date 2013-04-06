@@ -1,4 +1,3 @@
-from game import MAP_HEIGHT, MAP_WIDTH
 import sys
 
 from multiprocessing import Process, Queue, Value
@@ -35,9 +34,11 @@ class WindowBox(object):
             return curses.newwin(self.height,self.width,self.yoffset,self.xoffset) 
 
 class AsyncCursesScreen(object):
-    def __init__(self):
+    def __init__(self,mapheight,mapwidth):
         self.paused = False
         self.halting = False
+        self.mapheight = mapheight
+        self.mapwidth = mapwidth
     def start(self,q,running):
         self.running = running
         self.queue = q
@@ -71,9 +72,9 @@ class AsyncCursesScreen(object):
         curses.init_pair(5,curses.COLOR_BLUE,curses.COLOR_BLACK)
         curses.init_pair(2,curses.COLOR_YELLOW,curses.COLOR_BLACK)
          
-        mapbox = WindowBox(MAP_HEIGHT+5, MAP_WIDTH*2+5, 0, 0)
-        unitbox = WindowBox(MAP_HEIGHT+5, tx-(MAP_WIDTH*2+5), 0, MAP_WIDTH*2+5)
-        debugbox = WindowBox(ty-(MAP_HEIGHT+5), tx, MAP_HEIGHT+5, 0)
+        mapbox = WindowBox(self.mapheight+5, self.mapwidth*2+5, 0, 0)
+        unitbox = WindowBox(self.mapheight+5, tx-(self.mapwidth*2+5), 0, self.mapwidth*2+5)
+        debugbox = WindowBox(ty-(self.mapheight+5), tx, self.mapheight+5, 0)
 
         if tx < 120:
             curses.resizeterm(ty,120)
@@ -87,9 +88,7 @@ class AsyncCursesScreen(object):
         if not unitbox.check_dims(stdscr):
             return
        
-        print CRASHH
- 
-        self.game = MapWindow(mapbox, MAP_WIDTH,MAP_HEIGHT)
+        self.game = MapWindow(mapbox, self.mapwidth,self.mapheight)
         self.unit = UnitWindow(unitbox)
         self.debug = DebugWindow(debugbox)
        
@@ -169,14 +168,14 @@ class CursesWindow(object):
         return self.usabley[1]-self.usabley[0]
 
 class MapWindow(CursesWindow):
-    def __init__(self, windowbox, map_width, map_height):
+    def __init__(self, windowbox, mapwidth, mapheight):
         x = super(MapWindow, self).__init__(windowbox,window_title="Map")
         self.window.idlok(1)
         self.window.scrollok(True)
-        for i in range(map_width):
+        for i in range(mapwidth):
             self.window.addch(2,i*2+4,str(i/10)[0])
             self.window.addch(3,i*2+4,str(i%10)[0])
-        for i in range(map_height):
+        for i in range(mapheight):
             self.window.addch(i+4,1,str(i/10)[0])
             self.window.addch(i+4,2,str(i%10)[0])
         self.usablex = (4,self.usablex[1])
@@ -192,8 +191,8 @@ class MapWindow(CursesWindow):
         self.cwindow = self.window.derwin(1,self.usable_width(),1,self.usablex[0])
         self.describe_cursor()
         self.window.refresh()
-        self.map_width = map_width
-        self.map_height = map_height
+        self.mapwidth = mapwidth
+        self.mapheight = mapheight
         self.objects = []
         return x
 
@@ -208,8 +207,8 @@ class MapWindow(CursesWindow):
         self.describe_cursor()
         self.dwindow.erase()  
         # Draw dots in for all the celles
-        for i in range(self.map_width):
-            for j in range(self.map_height):
+        for i in range(self.mapwidth):
+            for j in range(self.mapheight):
                 self.dwindow.addch(j,i*2,'.')
         for o in self.objects:
             self.dwindow.addch(o['y'], o['x']*2, o['v'][0],curses.color_pair(o['v'][1]))
@@ -226,16 +225,16 @@ class MapWindow(CursesWindow):
         self.cwindow.refresh()
  
     def fix_cursor(self):
-        if self.cursor[1] >= self.map_width:
+        if self.cursor[1] >= self.mapwidth:
             x = 0
         elif self.cursor[1] < 0:
-            x = self.map_width-1
+            x = self.mapwidth-1
         else:
             x = self.cursor[1]
-        if self.cursor[0] >= self.map_height:
+        if self.cursor[0] >= self.mapheight:
             y = 0
         elif self.cursor[0] < 0:
-            y = self.map_height-1
+            y = self.mapheight-1
         else:
             y = self.cursor[0]
         self.cursor = (y,x)
