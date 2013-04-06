@@ -44,6 +44,7 @@ class AsyncCursesScreen(object):
         try:
             curses.wrapper(self.handler)
         except:
+            curses.endwin()
             #Restore the real stderr and stdout?
             sys.stderr = Vexulizer.rstderr
             sys.stdout = Vexulizer.rstdout
@@ -85,7 +86,9 @@ class AsyncCursesScreen(object):
 
         if not unitbox.check_dims(stdscr):
             return
-        
+       
+        print CRASHH
+ 
         self.game = MapWindow(mapbox, MAP_WIDTH,MAP_HEIGHT)
         self.unit = UnitWindow(unitbox)
         self.debug = DebugWindow(debugbox)

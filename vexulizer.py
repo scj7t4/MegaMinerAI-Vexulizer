@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from StringIO import StringIO
 from Queue import Empty
 import traceback
+import os
 
 import random
 
@@ -32,18 +33,27 @@ class Vexulizer(object):
         self.locq.put(('halt',''),False)
         if not self.running.value:
             self.proc.terminate()
+        # If the local queue is not empty the process will hang on exit
+        # so dump the queue out
+        try:
+            while 1:
+               self.locq.get(False)
+        except Empty:
+            pass
         self.proc.join()
         sys.stdout = self.rstdout
         sys.stderr = self.rstderr
         sys.stdout.flush()
         sys.stderr.flush()   
+        print "Reached end of stop debugger"
  
     def update_units(self, units):
         self.locq.put(('units',units))
 
     def print_debug(self, string):
         self.locq.put(('debug',string))
-        
+   
+    """
     def __del__(self):
         # Restore the stdout on destruction
         self.rstdout.write(self.buff.getvalue())
@@ -51,7 +61,7 @@ class Vexulizer(object):
         self.rstderr.write(self.errbuff.getvalue())
         self.rstderr.flush() 
         #return super(Vexulizer,self).__del__()
-
+    """
 
 class DebugBuffer(StringIO):
     def __init__(self,locq,running, replaces=None):
@@ -79,7 +89,6 @@ class DebugBuffer(StringIO):
 
 
 if __name__ == "__main__":
-    print "HAI"
     v = Vexulizer()
 
     print "Goodbye"
