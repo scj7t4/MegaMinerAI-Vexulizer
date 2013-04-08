@@ -68,6 +68,8 @@ class Vexulizer(object):
                self.locq.get(False)
         except Empty:
             pass
+        self.rstdout.write(sys.stdout.getvalue())
+        self.rstderr.write(sys.stderr.getvalue())
         sys.stdout = self.rstdout
         sys.stderr = self.rstderr
         sys.stdout.flush()

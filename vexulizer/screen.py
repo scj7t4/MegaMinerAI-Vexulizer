@@ -219,6 +219,9 @@ class AsyncCursesScreen(object):
                         self.halting = True
                         self.debug.write("-- End of queue, press space to close\n")
                     elif t == 'breakpoint':
+                        if self.tc < contents:
+                            self.tc = contents
+                            self.pc = 0
                         self.pickle()
                         self.debug.write("-- Breakpoint {}\n".format(contents))
                         self.paused = True
