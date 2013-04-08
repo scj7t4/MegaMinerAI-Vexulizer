@@ -132,11 +132,19 @@ class AsyncCursesScreen(object):
         #: The debug (stdout/stderr) view.
         self.debug = DebugWindow(debugbox)
        
+        #: All the pickle points we've captured so far
+        self.pickles = []
+        #: The turn counter
+        self.tc = 0
+        #: The pickle counter (sub part of turn)
+        self.pc = 0
+        #: The pickles cursor
+        self.cursor = -1
         while 1:
             # Accept key events from the terminal
             key = stdscr.getch()
             if key != -1:
-                self.debug.write("Got key {}".format(key))
+                self.debug.write("Got key {}\n".format(key))
             if key == curses.KEY_UP:
                 #self.debug.write("Got key up")
                 self.game.cursor_up()
@@ -161,9 +169,44 @@ class AsyncCursesScreen(object):
                     break
                 self.paused = not self.paused
                 if self.paused:
-                    self.debug.write("-- Paused")
+                    # Create a pickle when we pause.
+                    self.debug.write("-- Paused\n")
+                    self.pickle(destroy=True)
                 else:
-                    self.debug.write("-- Unpaused")
+                    # Restore the last pickle point when we unpause
+                    # Then destroy it.
+                    pickle = self.pickles[-1]
+                    if pickle['destroy']:
+                        self.pickles.pop()
+                    self.unpickle(pickle)
+                    self.debug.write("-- Unpaused\n")
+            elif key == 44: #Left bracket
+                if not self.paused:
+                    if not self.halting:
+                        self.debug.write("--Paused\n")
+                    self.pickle(destroy=True)
+                    self.paused = True
+                    self.cursor = -1
+                    self.unpickle(self.pickles[self.cursor])
+                else:
+                    try:
+                        self.cursor -= 1
+                        self.unpickle(self.pickles[self.cursor])
+                    except IndexError:
+                        self.debug.write("--At oldest state\n")
+                        self.cursor += 1
+            elif key == 46: # Right bracket
+                if self.paused:
+                    self.cursor += 1
+                    if self.cursor > -1:
+                        self.debug.write("--At Newest state, unpause to get more tokens.\n")
+                        self.cursor = -1
+                    try:
+                        self.unpickle(self.pickles[self.cursor])
+                    except IndexError:
+                        self.debug.write("--At Newest state\n")
+                    
+                
             # Pull items from the pipe if not paused
             if not self.paused:
                 try:
@@ -174,7 +217,16 @@ class AsyncCursesScreen(object):
                         self.debug.write(contents)            
                     elif t == 'halt':
                         self.halting = True
-                        self.debug.write("-- End of queue, press space to close")
+                        self.debug.write("-- End of queue, press space to close\n")
+                    elif t == 'breakpoint':
+                        self.pickle()
+                        self.debug.write("-- Breakpoint {}\n".format(contents))
+                        self.paused = True
+                    elif t == 'snapshot':
+                        if self.tc < contents:
+                            self.tc = contents
+                            self.pc = 0
+                        self.pickle()                
                 except Empty:
                     pass
                 
@@ -184,7 +236,17 @@ class AsyncCursesScreen(object):
             self.unit.blit()
             self.game.blit()
             sleep(.01)
+
+    def pickle(self,destroy=False):
+        self.pc += 1
+        pickle = {'debug': self.debug.pickle(), 'unit': self.unit.pickle(), 'game': self.game.pickle(), 'destroy': destroy, 'id': (self.tc,self.pc)}
+        self.game.set_snapshot_id(self.tc,self.pc)
+        self.pickles.append(pickle)
     
+    def unpickle(self,p):
+        self.debug.unpickle(p['debug'])
+        self.unit.unpickle(p['unit'])
+        self.game.unpickle(p['game'])
 
 class CursesWindow(object):
     """
@@ -222,6 +284,12 @@ class CursesWindow(object):
         """
         return self.usabley[1]-self.usabley[0]
 
+    def pickle(self):
+        return {}
+
+    def unpickle(self,p):
+        pass
+
 class MapWindow(CursesWindow):
     """
     The grid based view of the game map.
@@ -229,6 +297,10 @@ class MapWindow(CursesWindow):
     
     def __init__(self, windowbox, colors, mapwidth, mapheight):
         x = super(MapWindow, self).__init__(windowbox,window_title="Map")
+        #: The pickle counter of the map being shown
+        self.pc = 0
+        #: The turn counter of the map map being shown
+        self.tc = 0
         self.window.idlok(1)
         self.window.scrollok(True)
         for i in range(mapwidth):
@@ -265,6 +337,10 @@ class MapWindow(CursesWindow):
         #: The objects drawn on the map.
         self.objects = []
         return x
+
+    def set_snapshot_id(self,tc,pc):
+        self.tc = tc
+        self.pc = pc
 
     def objects_at_cursor(self):
         """
@@ -314,7 +390,7 @@ class MapWindow(CursesWindow):
         which is printed at the top of the map.
         """
         self.cwindow.erase()
-        self.cwindow.addstr("Cursor Position {},{}".format(self.cursor[1],self.cursor[0]))
+        self.cwindow.addstr("Cursor Position {},{} | Showing {}".format(self.cursor[1],self.cursor[0],(self.tc,self.pc)))
         self.cwindow.refresh()
  
     def fix_cursor(self):
@@ -372,6 +448,13 @@ class MapWindow(CursesWindow):
         """
         self.showcursor = False
 
+    def pickle(self):
+        return {'objects': list(self.objects), 'tc': self.tc, 'pc': self.pc}
+
+    def unpickle(self,pickle):
+        self.objects = pickle['objects']
+        self.tc = pickle['tc']
+        self.pc = pickle['pc']
 
 class UnitWindow(CursesWindow):
     """
@@ -399,6 +482,12 @@ class UnitWindow(CursesWindow):
         #: The objects that are being viewed constantly
         self.viewing = []
         return x
+
+    def pickle(self):
+        return {}
+        
+    def unpickle(self, p):
+        pass
 
     def view(self,objs):
         """
@@ -509,16 +598,30 @@ class DebugWindow(CursesWindow):
         self.dwindow.idlok(1)
         self.dwindow.scrollok(True)
         self.dwindow.refresh()
+        self.scrollback = []
+        self.scrollbacklines = scrollback
         self.write("Logger Output Will Appear Here\n")
-        #: Helps keep the number of redraws
-        self.dirty = False
         return x
+
+    def pickle(self):
+        return {'scrollback': list(self.scrollback)}
+
+    def unpickle(self, p):
+        self.scrollback = p['scrollback']
+        self.dwindow.erase()
+        self.dwindow.refresh()
+        for line in self.scrollback:
+            self.dwindow.addstr(line)
+        self.dwindow.refresh()
 
     def write(self,string):
         """
         Puts a string to the screen.
         """
         string = str(string)
+        self.scrollback.append(string)
+        while len(self.scrollback) > self.scrollbacklines:
+            self.scrollback.pop(0)
         #Chunk the string to display nicely:
         self.dwindow.addstr(string)
         self.dwindow.refresh()

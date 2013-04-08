@@ -78,6 +78,9 @@ class Vexulizer(object):
         Function to transport the units token to the curses screen.
         """
         self.locq.put(('units',units))
+    
+    def mark_turn(self, turn):
+        self.locq.put(('snapshot',turn))
 
     def print_debug(self, string):
         """
@@ -162,7 +165,8 @@ if __name__ == "__main__":
                             })
         #Convert the string IO to print debug
         print "Test!"
-        v.update_units(mapjunk) 
+        v.update_units(mapjunk)
+        v.mark_turn(i)
         sleep(.5)
  
     v.stop_debugger()

@@ -18,20 +18,20 @@ class ScreenColors(object):
     An object to allocate and look up colors in a convient naming scheme.
     """    
     def __init__(self):
-        c = 2
+        c = 2 
         #: The next available color to allocate for user defined colors
         self.colorcounter = 9
         #: The colors that have been allocated by the user so far
         self.allocated = {} 
         #: A map from the name to the color identifier. 
         self.nametoid = {}
+        curses.start_color()
         for (k,v) in COLOR_DEFINITIONS.iteritems():
-            print v
             fg = self.init_color(v[0])
             bg = self.init_color(v[1])
             self.nametoid[k] = c
-            c += 1
             curses.init_pair(c,fg,bg)
+            c += 1
 
     def init_color(self,t):
         """
@@ -65,4 +65,5 @@ class ScreenColors(object):
         """
         Returns the number for the curses color pair represented by the name k
         """
-        return self.nametoid[k]
+        x = curses.color_pair(self.nametoid[k])
+        return x
